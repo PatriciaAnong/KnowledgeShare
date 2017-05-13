@@ -1,2 +1,2 @@
 # KnowledgeShare
-A public repository of scripts to share my knowlegde
+A public repository of my scripts to share my knowledge
