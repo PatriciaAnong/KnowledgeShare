@@ -1,0 +1,553 @@
+{
+	"Description": "CloudFormation LAMP Stack Template with Multi AZ Deployment.Note: This template uses an Application Load Balancer and provisions 2 EC2 Instances.",
+	"Parameters": {
+		"VpcId": {
+			"Type": "AWS::EC2::VPC::Id",
+			"Description": "VpcId of your existing Virtual Private Cloud (VPC)",
+			"ConstraintDescription": "must be the VPC Id of an existing Virtual Private Cloud."
+		},
+		"Subnets": {
+			"Type": "List<AWS::EC2::Subnet::Id>",
+			"Description": "The list of SubnetIds in your Virtual Private Cloud (VPC)",
+			"ConstraintDescription": "must be a list of at least two existing subnets associated with at least two different availability zones. They should be residing in the selected Virtual Private Cloud."
+		},
+		"KeyName": {
+			"Description": "Name of an existing EC2 KeyPair to enable SSH access to the instances",
+			"Type": "AWS::EC2::KeyPair::KeyName",
+			"ConstraintDescription": "must be the name of an existing EC2 KeyPair."
+		},
+		"DBName": {
+			"Default": "Transformers",
+			"Description": "MySQL database name",
+			"Type": "String",
+			"MinLength": "1",
+			"MaxLength": "64",
+			"AllowedPattern": "[a-zA-Z][a-zA-Z0-9]*",
+			"ConstraintDescription": "must begin with a letter and contain only alphanumeric characters."
+		},
+		"DBUser": {
+			"NoEcho": "true",
+			"Description": "Username for MySQL database access",
+			"Type": "String",
+			"MinLength": "1",
+			"MaxLength": "16",
+			"AllowedPattern": "[a-zA-Z][a-zA-Z0-9]*",
+			"ConstraintDescription": "must begin with a letter and contain only alphanumeric characters."
+		},
+		"DBPassword": {
+			"NoEcho": "true",
+			"Description": "Password for MySQL database access",
+			"Type": "String",
+			"MinLength": "8",
+			"MaxLength": "41",
+			"AllowedPattern": "[a-zA-Z0-9]*",
+			"ConstraintDescription": "must contain only alphanumeric characters."
+		},
+		"DBInstanceIdentifier": {
+			"Default": "AgeOfExtinction",
+			"Description": "DB Instance Name",
+			"Type": "String",
+			"MinLength": "8",
+			"MaxLength": "41",
+			"AllowedPattern": "[a-zA-Z0-9]*",
+			"ConstraintDescription": "must contain only alphanumeric characters."
+		},
+		"DBAllocatedStorage": {
+			"Default": "20",
+			"Description": "The size of the database (GB)",
+			"Type": "Number",
+			"MinValue": "20",
+			"MaxValue": "1024",
+			"ConstraintDescription": "must be between 20 and 1024GB."
+		},
+		"DBInstanceClass": {
+			"Description": "The database instance type",
+			"Type": "String",
+			"Default": "db.t2.small",
+			"AllowedValues": [
+				"db.t1.micro",
+				"db.t2.micro",
+				"db.t2.small",
+				"db.t2.medium",
+				"db.t2.large"
+			],
+			"ConstraintDescription": "must select a valid database instance type."
+		},
+		"MultiAZDatabase": {
+			"Default": "true",
+			"Description": "Create a Multi-AZ MySQL Amazon RDS database instance",
+			"Type": "String",
+			"AllowedValues": [
+				"true",
+				"false"
+			],
+			"ConstraintDescription": "must be either true or false."
+		},
+		"WebServerCapacity": {
+			"Default": "2",
+			"Description": "The initial nuber of WebServer instances",
+			"Type": "Number",
+			"MinValue": "1",
+			"MaxValue": "3",
+			"ConstraintDescription": "must be between 1 and 3 EC2 instances."
+		},
+		"InstanceType": {
+			"Description": "WebServer EC2 instance type",
+			"Type": "String",
+			"Default": "t2.small",
+			"AllowedValues": [
+				"t2.nano",
+				"t2.micro",
+				"t2.small",
+				"t2.medium",
+				"t2.large"
+			],
+			"ConstraintDescription": "must be a valid EC2 instance type."
+		},
+		"SSHLocation": {
+			"Description": " The IP address range that can be used to SSH to the EC2 instances",
+			"Type": "CommaDelimitedList",
+			"Default": "0.0.0.0/0",
+			"ConstraintDescription": "must be a valid CIDR range of the form x.x.x.x/x."
+		}
+	},
+	"Mappings": {
+		"AWSInstanceType2Arch": {
+			"t2.nano": {
+				"Arch": "HVM64"
+			},
+			"t2.micro": {
+				"Arch": "HVM64"
+			},
+			"t2.small": {
+				"Arch": "HVM64"
+			},
+			"t2.medium": {
+				"Arch": "HVM64"
+			},
+			"t2.large": {
+				"Arch": "HVM64"
+			}
+		},
+		"AWSRegionArch2AMI": {
+			"us-east-1": {
+				"HVM64": "ami-0922553b7b0369273"
+			},
+			"us-west-2": {
+				"HVM64": "ami-7172b611"
+			},
+			"us-west-1": {
+				"HVM64": "ami-31490d51"
+			}
+		}
+	},
+	"Resources": {
+		"ApplicationLoadBalancer": {
+			"Type": "AWS::ElasticLoadBalancingV2::LoadBalancer",
+			"Properties": {
+				"Subnets": {
+					"Ref": "Subnets"
+				}
+			}
+		},
+		"ALBListener": {
+			"Type": "AWS::ElasticLoadBalancingV2::Listener",
+			"Properties": {
+				"DefaultActions": [
+					{
+						"Type": "forward",
+						"TargetGroupArn": {
+							"Ref": "ALBTargetGroup"
+						}
+					}
+				],
+				"LoadBalancerArn": {
+					"Ref": "ApplicationLoadBalancer"
+				},
+				"Port": "80",
+				"Protocol": "HTTP"
+			}
+		},
+		"ALBTargetGroup": {
+			"Type": "AWS::ElasticLoadBalancingV2::TargetGroup",
+			"Properties": {
+				"HealthCheckIntervalSeconds": 10,
+				"HealthCheckTimeoutSeconds": 5,
+				"HealthyThresholdCount": 2,
+				"Port": 80,
+				"Protocol": "HTTP",
+				"UnhealthyThresholdCount": 5,
+				"VpcId": {
+					"Ref": "VpcId"
+				},
+				"TargetGroupAttributes": [
+					{
+						"Key": "stickiness.enabled",
+						"Value": "true"
+					},
+					{
+						"Key": "stickiness.type",
+						"Value": "lb_cookie"
+					},
+					{
+						"Key": "stickiness.lb_cookie.duration_seconds",
+						"Value": "30"
+					}
+				]
+			}
+		},
+		"WebServerGroup": {
+			"Type": "AWS::AutoScaling::AutoScalingGroup",
+			"Properties": {
+				"VPCZoneIdentifier": {
+					"Ref": "Subnets"
+				},
+				"LaunchConfigurationName": {
+					"Ref": "LaunchConfig"
+				},
+				"MinSize": "1",
+				"MaxSize": "3",
+				"DesiredCapacity": {
+					"Ref": "WebServerCapacity"
+				},
+				"TargetGroupARNs": [
+					{
+						"Ref": "ALBTargetGroup"
+					}
+				]
+			},
+			"CreationPolicy": {
+				"ResourceSignal": {
+					"Timeout": "PT5M",
+					"Count": {
+						"Ref": "WebServerCapacity"
+					}
+				}
+			},
+			"UpdatePolicy": {
+				"AutoScalingRollingUpdate": {
+					"MinInstancesInService": "1",
+					"MaxBatchSize": "1",
+					"PauseTime": "PT15M",
+					"WaitOnResourceSignals": "true"
+				}
+			}
+		},
+		"LaunchConfig": {
+			"Type": "AWS::AutoScaling::LaunchConfiguration",
+			"Metadata": {
+				"Comment1": "Configure the bootstrap helpers to install the Apache Web Server and PHP",
+				"AWS::CloudFormation::Init": {
+					"config": {
+						"packages": {
+							"yum": {
+								"httpd": [],
+								"php": [],
+								"php-mysql": []
+							}
+						},
+						"files": {
+							"/var/www/html/index.php": {
+								"content": {
+									"Fn::Join": [
+										"",
+										[
+											"<html>\n",
+											"  <head>\n",
+											"    <title>Patricia Anong's Automation Test Website from LAMP STACK</title>\n",
+											"  </head>\n",
+											"  <body>\n",
+											"    <h1>You Can Call Us Autobots</h1>\n",
+											"    <p/>\n",
+											"    <?php\n",
+											"      // Print out the current data and time\n",
+											"      print \"The Current Date and Time is: <br/>\";\n",
+											"      print date(\"g:i A e D, M d Y.\");\n",
+											"    ?>\n",
+											"    <p/>\n",
+											"    <body>Everything humans know of our planet we were told had been shared. You lied to us. You've made a grave mistake.</body>\n"
+										]
+									]
+								},
+								"mode": "000600",
+								"owner": "apache",
+								"group": "apache"
+							},
+							"/etc/cfn/cfn-hup.conf": {
+								"content": {
+									"Fn::Join": [
+										"",
+										[
+											"[main]\n",
+											"stack=",
+											{
+												"Ref": "AWS::StackId"
+											},
+											"\n",
+											"region=",
+											{
+												"Ref": "AWS::Region"
+											},
+											"\n"
+										]
+									]
+								},
+								"mode": "000400",
+								"owner": "root",
+								"group": "root"
+							},
+							"/etc/cfn/hooks.d/cfn-auto-reloader.conf": {
+								"content": {
+									"Fn::Join": [
+										"",
+										[
+											"[cfn-auto-reloader-hook]\n",
+											"triggers=post.update\n",
+											"path=Resources.LaunchConfig.Metadata.AWS::CloudFormation::Init\n",
+											"action=/opt/aws/bin/cfn-init -v ",
+											"         --stack ",
+											{
+												"Ref": "AWS::StackName"
+											},
+											"         --resource LaunchConfig ",
+											"         --region ",
+											{
+												"Ref": "AWS::Region"
+											},
+											"\n",
+											"runas=root\n"
+										]
+									]
+								},
+								"mode": "000400",
+								"owner": "root",
+								"group": "root"
+							}
+						},
+						"services": {
+							"sysvinit": {
+								"httpd": {
+									"enabled": "true",
+									"ensureRunning": "true"
+								},
+								"cfn-hup": {
+									"enabled": "true",
+									"ensureRunning": "true",
+									"files": [
+										"/etc/cfn/cfn-hup.conf",
+										"/etc/cfn/hooks.d/cfn-auto-reloader.conf"
+									]
+								}
+							}
+						}
+					}
+				}
+			},
+			"Properties": {
+				"ImageId": {
+					"Fn::FindInMap": [
+						"AWSRegionArch2AMI",
+						{
+							"Ref": "AWS::Region"
+						},
+						{
+							"Fn::FindInMap": [
+								"AWSInstanceType2Arch",
+								{
+									"Ref": "InstanceType"
+								},
+								"Arch"
+							]
+						}
+					]
+				},
+				"InstanceType": {
+					"Ref": "InstanceType"
+				},
+				"SecurityGroups": [
+					{
+						"Ref": "WebServerSecurityGroup"
+					}
+				],
+				"KeyName": {
+					"Ref": "KeyName"
+				},
+				"UserData": {
+					"Fn::Base64": {
+						"Fn::Join": [
+							"",
+							[
+								"#!/bin/bash -xe\n",
+								"yum update -y aws-cfn-bootstrap\n",
+								"# Install the files and packages from the metadata\n",
+								"/opt/aws/bin/cfn-init -v ",
+								"         --stack ",
+								{
+									"Ref": "AWS::StackName"
+								},
+								"         --resource LaunchConfig ",
+								"         --region ",
+								{
+									"Ref": "AWS::Region"
+								},
+								"\n",
+								"# Signal the status from cfn-init\n",
+								"/opt/aws/bin/cfn-signal -e $? ",
+								"         --stack ",
+								{
+									"Ref": "AWS::StackName"
+								},
+								"         --resource WebServerGroup ",
+								"         --region ",
+								{
+									"Ref": "AWS::Region"
+								},
+								"\n"
+							]
+						]
+					}
+				}
+			}
+		},
+		"WebServerSecurityGroup": {
+			"Type": "AWS::EC2::SecurityGroup",
+			"Properties": {
+				"GroupDescription": "Enable HTTP access via port 80 locked down to the ELB and SSH access",
+				"SecurityGroupIngress": [
+					{
+						"IpProtocol": "tcp",
+						"FromPort": "80",
+						"ToPort": "80",
+						"SourceSecurityGroupId": {
+							"Fn::Select": [
+								0,
+								{
+									"Fn::GetAtt": [
+										"ApplicationLoadBalancer",
+										"SecurityGroups"
+									]
+								}
+							]
+						}
+					},
+					{
+						"IpProtocol": "tcp",
+						"FromPort": "22",
+						"ToPort": "22",
+						"CidrIp": {
+									"Fn::Select": [
+										"0",
+										{
+											"Ref": "SSHLocation"
+										}
+									]
+								}
+					}
+				],
+				"VpcId": {
+					"Ref": "VpcId"
+				}
+			}
+		},
+		"DBEC2SecurityGroup": {
+			"Type": "AWS::EC2::SecurityGroup",
+			"Properties": {
+				"GroupDescription": "Open database for access",
+				"SecurityGroupIngress": [
+					{
+						"IpProtocol": "tcp",
+						"FromPort": "3306",
+						"ToPort": "3306",
+						"SourceSecurityGroupId": {
+							"Ref": "WebServerSecurityGroup"
+						}
+					}
+				],
+				"VpcId": {
+					"Ref": "VpcId"
+				}
+			}
+		},
+		"DBSubnetGroup": {
+			"Type": "AWS::RDS::DBSubnetGroup",
+			"Properties": {
+				"DBSubnetGroupDescription": "AutoBots",
+				"SubnetIds": [
+					{
+						"Fn::Select": [
+							"0",
+							{
+								"Ref": "Subnets"
+							}
+						]
+					},
+					{
+						"Fn::Select": [
+							"1",
+							{
+								"Ref": "Subnets"
+							}
+						]
+					}
+				]
+			}
+		},
+		"MySQLDatabase": {
+			"Type": "AWS::RDS::DBInstance",
+			"Properties": {
+				"Engine": "MySQL",
+				"DBName": {
+					"Ref": "DBName"
+				},
+				"MultiAZ": {
+					"Ref": "MultiAZDatabase"
+				},
+				"MasterUsername": {
+					"Ref": "DBUser"
+				},
+				"MasterUserPassword": {
+					"Ref": "DBPassword"
+				},
+				"DBInstanceClass": {
+					"Ref": "DBInstanceClass"
+				},
+				"DBSubnetGroupName": {
+					"Ref": "DBSubnetGroup"
+				},
+				"DBInstanceIdentifier": {
+					"Ref": "DBInstanceIdentifier"
+				},
+				"AllocatedStorage": {
+					"Ref": "DBAllocatedStorage"
+				},
+				"VPCSecurityGroups": [
+					{
+						"Fn::GetAtt": [
+							"DBEC2SecurityGroup",
+							"GroupId"
+						]
+					}
+				]
+			}
+		}
+	},
+	"Outputs": {
+		"WebsiteURL": {
+			"Description": "URL for newly created LAMP stack",
+			"Value": {
+				"Fn::Join": [
+					"",
+					[
+						"http://",
+						{
+							"Fn::GetAtt": [
+								"ApplicationLoadBalancer",
+								"DNSName"
+							]
+						}
+					]
+				]
+			}
+		}
+	}
+}
